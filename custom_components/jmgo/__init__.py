@@ -11,7 +11,9 @@ from .const import DOMAIN
 
 PLATFORMS: Final[list[Platform]] = [
     Platform.REMOTE,
+    Platform.MEDIA_PLAYER,
 ]
+
 
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Set up a config entry."""
@@ -20,11 +22,13 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
     for k in [CONF_HOST, CONF_PORT, CONF_NAME]:
         config[k] = config_entry.data.get(k)
 
+    # Keep entry config in hass.data so platforms can share client/state
     hass.data[DOMAIN][config_entry.entry_id] = config
 
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
 
     return True
+
 
 async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Unload a config entry."""
