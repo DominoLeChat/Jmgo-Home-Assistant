@@ -1,12 +1,24 @@
-# JMGO remote integration for Home Assistant
+# Jmgo Projector Integration
 
-An integration for the JMGO remote in Home Assistant.
-A big thanks to the developer who wrote the Xgimi projector integration; I use the JMGO version, so I adapted it for my own use.
-The Home Assistant project for the Xgimi projector integration is here: https://github.com/manymuch/Xgimi-4-Home-Assistant
-The remote control signal comes from: https://github.com/XvZipo/JMGO-projector-controller
-I am using the Nut n3 ultra, and it works well.
+Integration Home Assistant pour projecteurs JMGO (mode LAN TCP)
 
-During setup, you need to configure the IP and port. My device uses port 9005; I don't know if other models use the same port.
-![Image](https://github.com/user-attachments/assets/09623fb6-97b9-4320-8b5a-b9a0af4abf44)
+Installation (HACS manual):
+1. Dans HACS, choisissez "Intégrations" -> "..." -> "Ajouter un dépôt manuel".
+2. Collez l'URL du dépôt et installez.
+3. Redémarrez Home Assistant.
+4. Configurez l'intégration via Configuration -> Intégrations -> Ajouter JMGO (host, port, name).
 
-It may be a bit rough, and the documentation is hard to understand. If any experts can help optimize it, that would be greatly appreciated.
+Limitations et notes
+- Cette intégration utilise le contrôle LAN TCP (port par défaut 9005). Aucune dépendance ADB.
+- Le media_player expose le volume normalisé (0.0–1.0) et le contrôle de volume via les commandes fournies par le protocole.
+- Le mode POWER est manipulé prudemment : la commande POWER n'est envoyée que si l'état power_state est explicitement rapporté par l'appareil. Si l'état est inconnu, l'action POWER est refusée pour éviter d'éteindre ou de mettre en veille prolongée par erreur.
+- Le composant partage le client réseau entre remote et media_player pour éviter des connexions concurrentes.
+
+Tests
+- Des tests unitaires sont fournis (tests/test_media_player.py) et peuvent être exécutés avec pytest.
+
+HACS
+- Un fichier hacs.json est inclus pour compatibilité HACS. Assurez-vous que le dépôt est public pour l'ajouter dans HACS.
+
+Contributions
+- Merci de fournir des trames réseau (exemples de réponse TCP) si vous voulez que je parsèe d'autres champs (source, application, etc.).
