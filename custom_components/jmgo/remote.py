@@ -1,4 +1,4 @@
-"""Support for the Xgimi Projector."""
+"""Support for the Xgimi Projector (updated to reuse shared client)."""
 
 from collections.abc import Iterable
 from homeassistant.config_entries import ConfigEntry
@@ -7,17 +7,18 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .Projector import Projector
 
-from collections.abc import Iterable
-
 from homeassistant.components.remote import (
     RemoteEntity,
 )
 
 from .const import DOMAIN
+import logging
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    """Set up the Xiaomi TV platform."""
+    """Set up the Xiaomi TV platform (legacy platform configuration)."""
 
     # If a hostname is set. Discovery is skipped.
     host = config.get(CONF_HOST)
@@ -42,8 +43,14 @@ async def async_setup_entry(
     unique_id = config_entry.unique_id
     assert unique_id is not None
 
-    xgimi_api = Projector(host, port)
-    async_add_entities([XgimiRemote(xgimi_api, name, unique_id)])
+    # Reuse shared client stored in hass.data to avoid concurrent connections
+    store = hass.data[DOMAIN].setdefault(config_entry.entry_id, {})
+    client = store.get("client")
+    if client is None:
+        client = Projector(host, port)
+        store["client"] = client
+
+    async_add_entities([XgimiRemote(client, name, unique_id)])
 
 
 class XgimiRemote(RemoteEntity):
@@ -58,16 +65,16 @@ class XgimiRemote(RemoteEntity):
 
     def update(self):
         """Retrieve latest state."""
-        self.xgimi_api.async_fetch_data()
-
-
+        try:
+            self.xgimi_api.async_fetch_data()
+        except Exception as exc:
+            _LOGGER.debug("Error updating XGIMI remote: %s", exc)
 
     @property
     def is_on(self):
         """Return true if remote is on."""
-        return self.xgimi_api._is_on
-
-   
+        # rely on client internal flag if present
+        return getattr(self.xgimi_api, "_is_on", False)
 
     @property
     def name(self):
@@ -85,18 +92,35 @@ class XgimiRemote(RemoteEntity):
         return self._unique_id
 
     def turn_on(self, **kwargs):
-        """Turn the Xgimi Projector On."""
-        # Do the turning on.
-        self.xgimi_api.async_send_command("power")
+        """Turn the Xgimi Projector On. Prudent: only toggle if known OFF."""
+        try:
+            self.xgimi_api.async_fetch_data()
+            power = getattr(self.xgimi_api, "_is_on", None)
+            if power is None:
+                _LOGGER.warning("Power state unknown; refusing to send power toggle (turn_on)")
+                return
+            if power is False:
+                self.xgimi_api.async_send_command("power")
+        except Exception as exc:
+            _LOGGER.debug("Error turning on via remote: %s", exc)
 
     def turn_off(self, **kwargs):
-        """Turn the Xgimi Projector Off."""
-        # Do the turning off.
-        self.xgimi_api.async_send_command("power")
-
-    
+        """Turn the Xgimi Projector Off. Prudent: only toggle if known ON."""
+        try:
+            self.xgimi_api.async_fetch_data()
+            power = getattr(self.xgimi_api, "_is_on", None)
+            if power is None:
+                _LOGGER.warning("Power state unknown; refusing to send power toggle (turn_off)")
+                return
+            if power is True:
+                self.xgimi_api.async_send_command("power")
+        except Exception as exc:
+            _LOGGER.debug("Error turning off via remote: %s", exc)
 
     def send_command(self, command: Iterable[str], **kwargs) -> None:
         """Send a command to one of the devices."""
         for single_command in command:
-             self.xgimi_api.async_send_command(single_command)
+            try:
+                self.xgimi_api.async_send_command(single_command)
+            except Exception as exc:
+                _LOGGER.debug("Error sending command %s: %s", single_command, exc)
