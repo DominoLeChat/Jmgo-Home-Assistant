@@ -1,37 +1,49 @@
-"""Media player support for JMGO projector using existing Projector client."""
+"""JMGO Projector — Media Player Entity.
+
+Provides a fully-featured media_player entity exposing:
+- Power state (on/off/standby → unavailable)
+- Volume level & mute
+- Source selection (Android, HDMI 1, HDMI 2, USB, AV)
+- Media controls (play/pause, stop, next, previous)
+- Extra attributes: brightness, picture_mode
+"""
 from __future__ import annotations
 
-from typing import Final
-
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_HOST, CONF_NAME, CONF_PORT
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.components.media_player import (
-    MediaPlayerEntity,
-    SUPPORT_VOLUME_SET,
-    SUPPORT_VOLUME_STEP,
-    SUPPORT_TURN_ON,
-    SUPPORT_TURN_OFF,
-)
-from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNKNOWN
-
-from .Projector import Projector, match_power_state
-from .const import DOMAIN
 import logging
+
+from homeassistant.components.media_player import (
+    MediaPlayerDeviceClass,
+    MediaPlayerEntity,
+    MediaPlayerEntityFeature,
+    MediaPlayerState,
+)
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import (
+    CoordinatorEntity,
+    DataUpdateCoordinator,
+)
+
+from .const import API, COORDINATOR, DOMAIN
+from .projector_api import JMGOProjectorAPI, PICTURE_MODES, SOURCE_IDS
 
 _LOGGER = logging.getLogger(__name__)
 
-
-async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    # Backwards compatibility for platform setup
-    host = config.get(CONF_HOST)
-    name = config.get(CONF_NAME)
-    port = config.get(CONF_PORT)
-    unique_id = f"{name}-{host}-media_player"
-
-    xgimi_api = Projector(host, port)
-    async_add_entities([XgimiMediaPlayer(xgimi_api, name, unique_id)])
+SUPPORTED_FEATURES = (
+    MediaPlayerEntityFeature.TURN_ON
+    | MediaPlayerEntityFeature.TURN_OFF
+    | MediaPlayerEntityFeature.VOLUME_SET
+    | MediaPlayerEntityFeature.VOLUME_STEP
+    | MediaPlayerEntityFeature.VOLUME_MUTE
+    | MediaPlayerEntityFeature.SELECT_SOURCE
+    | MediaPlayerEntityFeature.PLAY
+    | MediaPlayerEntityFeature.PAUSE
+    | MediaPlayerEntityFeature.STOP
+    | MediaPlayerEntityFeature.NEXT_TRACK
+    | MediaPlayerEntityFeature.PREVIOUS_TRACK
+)
 
 
 async def async_setup_entry(
@@ -39,145 +51,194 @@ async def async_setup_entry(
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    config = hass.data[DOMAIN][config_entry.entry_id]
-    host = config[CONF_HOST]
-    name = config[CONF_NAME]
-    port = config[CONF_PORT]
+    """Set up the JMGO media player entity."""
+    data = hass.data[DOMAIN][config_entry.entry_id]
+    api: JMGOProjectorAPI = data[API]
+    coordinator: DataUpdateCoordinator = data[COORDINATOR]
 
-    unique_id = config_entry.unique_id
-    assert unique_id is not None
-
-    store = hass.data[DOMAIN].setdefault(config_entry.entry_id, {})
-    client = store.get("client")
-    if client is None:
-        client = Projector(host, port)
-        store["client"] = client
-
-    media_unique = f"{unique_id}-media_player"
-    async_add_entities([XgimiMediaPlayer(client, name, media_unique)])
+    async_add_entities(
+        [JMGOMediaPlayer(coordinator, api, config_entry)],
+        update_before_add=False,
+    )
 
 
-class XgimiMediaPlayer(MediaPlayerEntity):
-    """Media player for JMGO projector, reusing Projector client."""
+class JMGOMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
+    """Media Player entity for JMGO Projector.
 
-    def __init__(self, client: Projector, name: str, unique_id: str):
-        self._client = client
-        self._name = f"{name} Media Player"
-        self._unique_id = unique_id
-        self._attr_icon = "mdi:projector"
-        self._available = False
-        self._power_known = False
+    Reflects the projector's real-time state (polled every 30 s) and
+    exposes all supported controls to Home Assistant.
+    """
 
-    def update(self) -> None:
-        """Fetch latest data from the projector synchronously."""
-        try:
-            self._client.async_fetch_data()
-            # volume is updated into client.volume by async_fetch_data
-            # power detection via match_power_state is done there; we inspect client attributes
-            self._available = True
-        except Exception as exc:  # keep minimal changes to client behavior
-            _LOGGER.debug("Error fetching data from JMGO client: %s", exc)
-            self._available = False
+    _attr_has_entity_name = True
+    _attr_name = "Media Player"
+    _attr_icon = "mdi:projector"
+    _attr_device_class = MediaPlayerDeviceClass.TV
+    _attr_supported_features = SUPPORTED_FEATURES
+    _attr_source_list = list(SOURCE_IDS.keys())
+
+    def __init__(
+        self,
+        coordinator: DataUpdateCoordinator,
+        api: JMGOProjectorAPI,
+        config_entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator)
+        self._api = api
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{config_entry.unique_id}_media_player"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device info — same identifiers as remote to group them."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._config_entry.unique_id)},
+            name=self._config_entry.data.get("name", "JMGO Projector"),
+            manufacturer="JMGO",
+            model="N5S Ultra Max",
+        )
+
+    # ------------------------------------------------------------------
+    # State
+    # ------------------------------------------------------------------
 
     @property
     def available(self) -> bool:
-        return self._available
+        """True if projector is reachable on the network."""
+        if self.coordinator.data is None:
+            return False
+        return self.coordinator.data.available
 
     @property
-    def unique_id(self) -> str:
-        return self._unique_id
+    def state(self) -> MediaPlayerState | None:
+        """Return the current state."""
+        if self.coordinator.data is None:
+            return None
+        if not self.coordinator.data.available:
+            return MediaPlayerState.OFF
+        if self.coordinator.data.is_on:
+            return MediaPlayerState.ON
+        return MediaPlayerState.STANDBY
 
-    @property
-    def name(self) -> str:
-        return self._name
-
-    @property
-    def state(self):
-        # Only report ON/OFF if power_state was explicitly parsed by client
-        try:
-            # Projector.async_check_alive may set internal flags; we rely on client's logic
-            power = None
-            # try to re-check quickly
-            # Note: avoid network calls here; prefer the stored state from last update
-            # Some Projector implementations set _is_on; fall back to that
-            if hasattr(self._client, "_is_on"):
-                power = self._client._is_on
-            if power is True:
-                return STATE_ON
-            if power is False:
-                return STATE_OFF
-            return STATE_UNKNOWN
-        except Exception:
-            return STATE_UNKNOWN
+    # ------------------------------------------------------------------
+    # Volume
+    # ------------------------------------------------------------------
 
     @property
     def volume_level(self) -> float | None:
-        vol = getattr(self._client, "volume", None)
-        if vol is None:
+        """Volume level as 0.0–1.0."""
+        if self.coordinator.data is None:
             return None
-        try:
-            return max(0.0, min(1.0, vol / 100.0))
-        except Exception:
-            return None
+        return self.coordinator.data.volume / 100.0
 
     @property
-    def supported_features(self) -> int:
-        features = SUPPORT_VOLUME_SET | SUPPORT_VOLUME_STEP
-        # offer turn on/off only if client provides power info (we check for match_power_state presence)
-        # Heuristic: if async_check_alive returns power info via _is_on attribute, allow turn on/off
-        if hasattr(self._client, "_is_on"):
-            # only advertise turn on/off if client can report power state
-            features |= SUPPORT_TURN_ON | SUPPORT_TURN_OFF
-        return features
+    def is_volume_muted(self) -> bool | None:
+        """Return mute state."""
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.is_muted
 
-    def _level_to_volume(self, level: float) -> int:
-        return int(round(max(0.0, min(1.0, level)) * 100))
+    # ------------------------------------------------------------------
+    # Source
+    # ------------------------------------------------------------------
 
-    def async_set_volume_level(self, volume: float) -> None:
-        """Set volume as 0.0-1.0 using existing client set_volume."""
-        v = self._level_to_volume(volume)
-        try:
-            self._client.set_volume(v)
-            self._client.volume = v
-        except Exception as exc:
-            _LOGGER.debug("Error setting volume on JMGO client: %s", exc)
+    @property
+    def source(self) -> str | None:
+        """Current input source."""
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.source
 
-    def async_volume_up(self) -> None:
-        try:
-            self._client.volup()
-        except Exception as exc:
-            _LOGGER.debug("Error increasing volume on JMGO client: %s", exc)
+    # ------------------------------------------------------------------
+    # Extra attributes
+    # ------------------------------------------------------------------
 
-    def async_volume_down(self) -> None:
-        try:
-            self._client.voldown()
-        except Exception as exc:
-            _LOGGER.debug("Error decreasing volume on JMGO client: %s", exc)
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Expose brightness and picture_mode as extra attributes."""
+        attrs: dict = {}
+        if self.coordinator.data is None:
+            return attrs
+        if self.coordinator.data.brightness is not None:
+            attrs["brightness"] = self.coordinator.data.brightness
+        if self.coordinator.data.picture_mode is not None:
+            attrs["picture_mode"] = self.coordinator.data.picture_mode
+        attrs["available_picture_modes"] = PICTURE_MODES
+        return attrs
 
-    def async_turn_on(self) -> None:
-        # Prudent power handling: only send if we know the current power state and action is coherent
-        try:
-            # ensure state fetched recently
-            self._client.async_fetch_data()
-            # Check known power flags
-            power = getattr(self._client, "_is_on", None)
-            # If unknown, refuse to send power to avoid unwanted behavior
-            if power is None:
-                _LOGGER.warning("Power state unknown; refusing to send power toggle (turn_on)")
-                return
-            if power is False:
-                self._client.async_send_command("power")
-        except Exception as exc:
-            _LOGGER.debug("Error turning on JMGO client: %s", exc)
+    # ------------------------------------------------------------------
+    # Power commands
+    # ------------------------------------------------------------------
 
-    def async_turn_off(self) -> None:
-        try:
-            self._client.async_fetch_data()
-            power = getattr(self._client, "_is_on", None)
-            if power is None:
-                _LOGGER.warning("Power state unknown; refusing to send power toggle (turn_off)")
-                return
-            if power is True:
-                self._client.async_send_command("power")
-        except Exception as exc:
-            _LOGGER.debug("Error turning off JMGO client: %s", exc)
+    async def async_turn_on(self) -> None:
+        """Turn the projector on."""
+        await self._api.async_power_toggle()
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self) -> None:
+        """Turn the projector off."""
+        await self._api.async_turn_off()
+        await self.coordinator.async_request_refresh()
+
+    # ------------------------------------------------------------------
+    # Volume commands
+    # ------------------------------------------------------------------
+
+    async def async_set_volume_level(self, volume: float) -> None:
+        """Set volume from HA (0.0 – 1.0 → 0–100)."""
+        await self._api.async_set_volume(int(round(volume * 100)))
+        await self.coordinator.async_request_refresh()
+
+    async def async_volume_up(self) -> None:
+        """Increase volume by 1."""
+        await self._api.async_volume_up()
+        await self.coordinator.async_request_refresh()
+
+    async def async_volume_down(self) -> None:
+        """Decrease volume by 1."""
+        await self._api.async_volume_down()
+        await self.coordinator.async_request_refresh()
+
+    async def async_mute_volume(self, mute: bool) -> None:
+        """Mute or unmute."""
+        if mute:
+            await self._api.async_mute()
+        else:
+            await self._api.async_unmute()
+        await self.coordinator.async_request_refresh()
+
+    # ------------------------------------------------------------------
+    # Source selection
+    # ------------------------------------------------------------------
+
+    async def async_select_source(self, source: str) -> None:
+        """Switch input source."""
+        await self._api.async_select_source(source)
+        await self.coordinator.async_request_refresh()
+
+    # ------------------------------------------------------------------
+    # Media playback controls
+    # ------------------------------------------------------------------
+
+    async def async_media_play_pause(self) -> None:
+        """Toggle play/pause."""
+        await self._api.async_send_key("play_pause")
+
+    async def async_media_play(self) -> None:
+        """Send play."""
+        await self._api.async_send_key("play_pause")
+
+    async def async_media_pause(self) -> None:
+        """Send pause."""
+        await self._api.async_send_key("play_pause")
+
+    async def async_media_stop(self) -> None:
+        """Send stop."""
+        await self._api.async_send_key("stop")
+
+    async def async_media_next_track(self) -> None:
+        """Skip to next."""
+        await self._api.async_send_key("next")
+
+    async def async_media_previous_track(self) -> None:
+        """Go to previous."""
+        await self._api.async_send_key("prev")

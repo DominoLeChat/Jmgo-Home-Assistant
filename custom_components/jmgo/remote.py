@@ -1,33 +1,26 @@
-"""Support for the Xgimi Projector (updated to reuse shared client)."""
+"""JMGO Projector — Remote Entity.
 
+Provides full remote control (key events) for the projector.
+"""
+from __future__ import annotations
+
+import logging
 from collections.abc import Iterable
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_HOST, CONF_NAME, CONF_PORT
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from .Projector import Projector
 
-from homeassistant.components.remote import (
-    RemoteEntity,
+from homeassistant.components.remote import RemoteEntity, RemoteEntityFeature
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import (
+    CoordinatorEntity,
+    DataUpdateCoordinator,
 )
 
-from .const import DOMAIN
-import logging
+from .const import API, COORDINATOR, DOMAIN
+from .projector_api import JMGOProjectorAPI, KEY_COMMANDS
 
 _LOGGER = logging.getLogger(__name__)
-
-
-async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    """Set up the Xiaomi TV platform (legacy platform configuration)."""
-
-    # If a hostname is set. Discovery is skipped.
-    host = config.get(CONF_HOST)
-    name = config.get(CONF_NAME)
-    port = config.get(CONF_PORT)
-    unique_id = f"{name}-{host}"
-
-    xgimi_api = Projector(host, port)
-    async_add_entities([XgimiRemote(xgimi_api, name, unique_id)])
 
 
 async def async_setup_entry(
@@ -35,92 +28,80 @@ async def async_setup_entry(
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    config = hass.data[DOMAIN][config_entry.entry_id]
-    host = config[CONF_HOST]
-    name = config[CONF_NAME]
-    port = config[CONF_PORT]
+    """Set up the JMGO remote entity."""
+    data = hass.data[DOMAIN][config_entry.entry_id]
+    api: JMGOProjectorAPI = data[API]
+    coordinator: DataUpdateCoordinator = data[COORDINATOR]
 
-    unique_id = config_entry.unique_id
-    assert unique_id is not None
-
-    # Reuse shared client stored in hass.data to avoid concurrent connections
-    store = hass.data[DOMAIN].setdefault(config_entry.entry_id, {})
-    client = store.get("client")
-    if client is None:
-        client = Projector(host, port)
-        store["client"] = client
-
-    async_add_entities([XgimiRemote(client, name, unique_id)])
+    async_add_entities(
+        [JMGORemote(coordinator, api, config_entry)],
+        update_before_add=False,
+    )
 
 
-class XgimiRemote(RemoteEntity):
-    """An entity for Xgimi Projector
+class JMGORemote(CoordinatorEntity, RemoteEntity):
+    """Remote entity for JMGO Projector.
+
+    Supports all key commands discovered via packet capture of the
+    official 坚果控 app.
     """
 
-    def __init__(self, xgimi_api, name, unique_id):
-        self.xgimi_api = xgimi_api
-        self._name = name
-        self._icon = "mdi:projector"
-        self._unique_id = unique_id
+    _attr_has_entity_name = True
+    _attr_name = "Remote"
+    _attr_icon = "mdi:remote"
+    _attr_supported_features = RemoteEntityFeature.LEARN_COMMAND
 
-    def update(self):
-        """Retrieve latest state."""
-        try:
-            self.xgimi_api.async_fetch_data()
-        except Exception as exc:
-            _LOGGER.debug("Error updating XGIMI remote: %s", exc)
-
-    @property
-    def is_on(self):
-        """Return true if remote is on."""
-        # rely on client internal flag if present
-        return getattr(self.xgimi_api, "_is_on", False)
+    def __init__(
+        self,
+        coordinator: DataUpdateCoordinator,
+        api: JMGOProjectorAPI,
+        config_entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator)
+        self._api = api
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{config_entry.unique_id}_remote"
 
     @property
-    def name(self):
-        """Return the name of the device if any."""
-        return self._name
+    def device_info(self) -> DeviceInfo:
+        """Return device info."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._config_entry.unique_id)},
+            name=self._config_entry.data.get("name", "JMGO Projector"),
+            manufacturer="JMGO",
+            model="N5S Ultra Max",
+        )
 
     @property
-    def icon(self):
-        """Return the icon to use for device if any."""
-        return self._icon
+    def is_on(self) -> bool:
+        """Return True if the projector is on."""
+        if self.coordinator.data is None:
+            return False
+        return self.coordinator.data.is_on
 
     @property
-    def unique_id(self):
-        """Return an unique ID."""
-        return self._unique_id
+    def available(self) -> bool:
+        """Return availability."""
+        if self.coordinator.data is None:
+            return False
+        return self.coordinator.data.available
 
-    def turn_on(self, **kwargs):
-        """Turn the Xgimi Projector On. Prudent: only toggle if known OFF."""
-        try:
-            self.xgimi_api.async_fetch_data()
-            power = getattr(self.xgimi_api, "_is_on", None)
-            if power is None:
-                _LOGGER.warning("Power state unknown; refusing to send power toggle (turn_on)")
-                return
-            if power is False:
-                self.xgimi_api.async_send_command("power")
-        except Exception as exc:
-            _LOGGER.debug("Error turning on via remote: %s", exc)
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Expose all known remote commands as an attribute."""
+        return {"available_commands": sorted(KEY_COMMANDS.keys())}
 
-    def turn_off(self, **kwargs):
-        """Turn the Xgimi Projector Off. Prudent: only toggle if known ON."""
-        try:
-            self.xgimi_api.async_fetch_data()
-            power = getattr(self.xgimi_api, "_is_on", None)
-            if power is None:
-                _LOGGER.warning("Power state unknown; refusing to send power toggle (turn_off)")
-                return
-            if power is True:
-                self.xgimi_api.async_send_command("power")
-        except Exception as exc:
-            _LOGGER.debug("Error turning off via remote: %s", exc)
+    async def async_turn_on(self, **kwargs) -> None:
+        """Turn the projector on (power toggle)."""
+        await self._api.async_power_toggle()
+        await self.coordinator.async_request_refresh()
 
-    def send_command(self, command: Iterable[str], **kwargs) -> None:
-        """Send a command to one of the devices."""
-        for single_command in command:
-            try:
-                self.xgimi_api.async_send_command(single_command)
-            except Exception as exc:
-                _LOGGER.debug("Error sending command %s: %s", single_command, exc)
+    async def async_turn_off(self, **kwargs) -> None:
+        """Turn the projector off."""
+        await self._api.async_turn_off()
+        await self.coordinator.async_request_refresh()
+
+    async def async_send_command(self, command: Iterable[str], **kwargs) -> None:
+        """Send one or more remote commands."""
+        for cmd in command:
+            await self._api.async_send_command(cmd)

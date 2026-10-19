@@ -1,24 +1,8 @@
-# Jmgo Projector Integration
-
-Integration Home Assistant pour projecteurs JMGO (mode LAN TCP)
-
-Installation (HACS manual):
-1. Dans HACS, choisissez "Intégrations" -> "..." -> "Ajouter un dépôt manuel".
-2. Collez l'URL du dépôt et installez.
-3. Redémarrez Home Assistant.
-4. Configurez l'intégration via Configuration -> Intégrations -> Ajouter JMGO (host, port, name).
-
-Limitations et notes
-- Cette intégration utilise le contrôle LAN TCP (port par défaut 9005). Aucune dépendance ADB.
-- Le media_player expose le volume normalisé (0.0–1.0) et le contrôle de volume via les commandes fournies par le protocole.
-- Le mode POWER est manipulé prudemment : la commande POWER n'est envoyée que si l'état power_state est explicitement rapporté par l'appareil. Si l'état est inconnu, l'action POWER est refusée pour éviter d'éteindre ou de mettre en veille prolongée par erreur.
-- Le composant partage le client réseau entre remote et media_player pour éviter des connexions concurrentes.
-
-Tests
-- Des tests unitaires sont fournis (tests/test_media_player.py) et peuvent être exécutés avec pytest.
-
-HACS
-- Un fichier hacs.json est inclus pour compatibilité HACS. Assurez-vous que le dépôt est public pour l'ajouter dans HACS.
-
-Contributions
-- Merci de fournir des trames réseau (exemples de réponse TCP) si vous voulez que je parsèe d'autres champs (source, application, etc.).
+坚果遥控器集成到homeassistant的集成。
+大佬写了极米投影仪的集成，but我用的是坚果，所以就拿过来改改用了。
+极米投影仪集成homeassistant项目地址 https://github.com/manymuch/Xgimi-4-Home-Assistant
+遥控器信号来自https://github.com/XvZipo/JMGO-projector-controller
+我用的是坚果n3ultra,好使。
+集成时需要配置ip和 端口，我的机器端口是9005,不知道别的机器一样不一样
+![图片](https://github.com/user-attachments/assets/09623fb6-97b9-4320-8b5a-b9a0af4abf44)
+丑是丑了点，文档又看不懂，有没有大佬给优化优化

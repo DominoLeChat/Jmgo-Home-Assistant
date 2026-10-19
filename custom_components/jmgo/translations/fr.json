@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configurer le projecteur JMGO",
+        "description": "Entrez les informations réseau de votre projecteur JMGO. Le projecteur doit être allumé et connecté au même réseau.",
+        "data": {
+          "name": "Nom du projecteur",
+          "host": "Adresse IP ou nom d'hôte",
+          "port": "Port TCP (par défaut : 9005)"
+        }
+      }
+    },
+    "error": {
+      "invalid_host": "Adresse IP ou nom d'hôte invalide",
+      "cannot_connect": "Impossible de se connecter au projecteur. Vérifiez l'adresse IP et assurez-vous qu'il est allumé."
+    },
+    "abort": {
+      "already_configured": "Ce projecteur est déjà configuré"
+    }
+  }
+}

@@ -2,21 +2,21 @@
   "config": {
     "step": {
       "user": {
-        "title": "Configure projector info",
-        "description": "Please make sure your projector turned on before trying to set it up.",
+        "title": "Configure JMGO Projector",
+        "description": "Enter the network details of your JMGO projector. The projector must be on and connected to the same network.",
         "data": {
-          "name": "projector Name",
-          "host": "projector Host",
-          "port": "projector port"
+          "name": "Projector Name",
+          "host": "IP Address or Hostname",
+          "port": "TCP Port (default: 9005)"
         }
       }
     },
     "error": {
       "invalid_host": "Invalid hostname or IP address",
-      "cannot_connect": "Failed to connect"
+      "cannot_connect": "Cannot connect to the projector. Check IP and ensure it is powered on."
     },
     "abort": {
-      "already_configured": "Device is already configured"
+      "already_configured": "This projector is already configured"
     }
   }
 }
