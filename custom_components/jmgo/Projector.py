@@ -13,15 +13,15 @@ import logging
 _LOGGER = logging.getLogger(__name__)
 
 def match_volume(data):
-    """方法A：直接匹配 volume 后的数字"""
+    """Method A: directly match the number after 'volume'"""
     volume_regex = r'volume["\s:]*(\d{1,3})'
     match = re.search(volume_regex, data)
     
     if match:
         return int(match.group(1))
     
-    """方法B：查找独立字段的 volume（在 JSON 外的）
-       假设独立 volume 字段在前，格式为 "volume"+控制字符+数字"""
+    """Method B: search for a standalone 'volume' field (outside JSON)
+       Assumes the standalone 'volume' field appears first, formatted as 'volume' + control character + number"""
     standalone_volume_regex = r'volume[\x00-\x1F](\d{1,3})'
     standalone_match = re.search(standalone_volume_regex, data)
     
@@ -31,7 +31,7 @@ def match_volume(data):
     return None
 
 def match_power_state(data):
-    """匹配 power_state 后的单个数字"""
+    """Match the single digit after 'power_state'"""
     power_state_regex = r'power_state["\s:]*(\d)'
     match = re.search(power_state_regex, data)
     
@@ -95,7 +95,7 @@ class Projector:
 
     def async_check_alive(self):
        
-    
+
        try:
           sock=socket.socket()
           sock.connect((self.host,9005))
@@ -121,16 +121,17 @@ class Projector:
  
     def is_ip_reachable(ip, port, timeout=2):
         try:
-            # 创建一个socket对象
+            # Create a socket object
             with socket.create_connection((ip,9005), 2) as sock:
                 return True
         except (socket.error, socket.timeout):
             return False
  
 
-
+ 
 
     
+
 
     def exec(self, cmds):
         sock=socket.socket()
@@ -220,8 +221,6 @@ class Projector:
 
 
 
-    
-
 
     def async_send_command(self, command, **kwargs) -> None:
         """Send a command to one of the devices."""
@@ -234,7 +233,3 @@ class Projector:
         if command in self.commands:
            cmds = self.commands[command]
            self.exec(cmds)
-
-
-
-
