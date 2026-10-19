@@ -1,0 +1,8 @@
+{
+  "name": "Jmgo Projector",
+  "content_in_root": false,
+  "domains": ["jmgo"],
+  "zip_release": false,
+  "repo_type": "integration",
+  "render_readme": true
+}
